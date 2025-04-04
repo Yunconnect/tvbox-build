@@ -1,10 +1,10 @@
-name: Build TVBox (Manual)
+name: Build (Manual Only)
 
 on:
   workflow_dispatch:
     inputs:
-      force_rebuild:
-        description: '强制重新构建（即使没有新提交）'
+      rebuild:
+        description: '强制重新编译（即使没有新提交）'
         required: false
         type: boolean
 
@@ -24,89 +24,87 @@ jobs:
             javaVersion: 17
 
     steps:
-      # 步骤1：检出当前仓库（用于记录构建日志）
+      # 原始流程第1步：检出（保留）
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           path: actions
 
-      # 步骤2：获取目标仓库最新提交
-      - name: Get Latest Commit
+      # 原始流程第2步：检查新提交（保留）
+      - name: Get The Lastest Commit
         run: |
           git clone --depth=1 -b ${{ matrix.branchName }} ${{ matrix.repoUrl }} TVBoxOSC
           cd TVBoxOSC
-          commit=$(git log -1 --pretty=format:"%H")
-          echo "最新提交: $commit"
-          
-          # 检查是否需要构建（有新提交或强制重建）
+          commit=`git log --pretty=format:"%H" |grep -o '[a-z0-9]\{40\}' |head -1`
+          echo "commit: $commit"
           cd ../actions
-          if ! grep -q "$commit" ./build_log/${{ matrix.userName }}.log || [[ "${{ inputs.force_rebuild }}" == "true" ]]; then
-            echo "需要构建"
+          if ! grep -q "$commit" ./log/${{ matrix.userName }}.txt; then
             echo "commit=$commit" >> $GITHUB_ENV
-            echo "commit_short=${commit:0:7}" >> $GITHUB_ENV
-          else
-            echo "无新提交，跳过构建"
+            echo "commit_id=${commit:0:7}" >> $GITHUB_ENV
+          elif [[ "${{ inputs.rebuild }}" == "true" ]] ; then
+            echo "commit=$commit" >> $GITHUB_ENV
+            echo "commit_id=${commit:0:7}" >> $GITHUB_ENV
           fi
 
-      # 步骤3：完整克隆源代码（如果需要构建）
-      - name: Full Clone Source
+      # 原始流程第3步：完整克隆（保留）
+      - name: Clone Source Code
+        if: ${{ env.commit }}
+        working-directory: TVBoxOSC
+        run: git fetch --unshallow
+
+      # 原始流程第4步：压缩源码（保留）
+      - name: Compress Source Code
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          git fetch --unshallow
-          echo "构建标签=$(git log --date=format:'%Y%m%d_%H%M' --pretty=format:%cd -1)" >> $GITHUB_ENV
+          echo "tag=$(git log --date=format:'%Y.%m%d.%H%M' --pretty=format:%cd ${{ env.commit_id }} -1)" >> $GITHUB_ENV
+          echo "update_time=$(git log --date=format:'%Y/%m/%d %H:%M' --pretty=format:%cd ${{ env.commit_id }} -1)" >> $GITHUB_ENV
+          zip -q -x ".git/*" -r ${{ matrix.userName }}_${{ env.commit_id }}_src.zip .
 
-      # 步骤4：配置签名信息
-      - name: Setup Signing
+      # 原始流程第5步：签名配置（保留）
+      - name: Add Sign Info
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          # 复制签名文件
-          cp ${{ github.workspace }}/actions/.github/scripts/TVBoxOSC.jks ./app/
-          
-          # 配置gradle.properties
-          cat >> gradle.properties <<EOF
-          RELEASE_STORE_FILE=./TVBoxOSC.jks
-          RELEASE_KEY_ALIAS=TVBoxOSC
-          RELEASE_STORE_PASSWORD=TVBoxOSC
-          RELEASE_KEY_PASSWORD=TVBoxOSC
-          EOF
+          signingConfigs='ICAgIHNpZ25pbmdDb25maWdzIHtcCiAgICAgICAgaWYgKHByb2plY3QuaGFzUHJvcGVydHkoIlJFTEVBU0VfU1RPUkVfRklMRSIpKSB7XAogICAgICAgICAgICBteUNvbmZpZyB7XAogICAgICAgICAgICAgICAgc3RvcmVGaWxlIGZpbGUoUkVMRUFTRV9TVE9SRV9GSUxFKVwKICAgICAgICAgICAgICAgIHN0b3JlUGFzc3dvcmQgUkVMRUFTRV9TVE9SRV9QQVNTV09SRFwKICAgICAgICAgICAgICAgIGtleUFsaWFzIFJFTEVBU0VfS0VZX0FMSUFTXAogICAgICAgICAgICAgICAga2V5UGFzc3dvcmQgUkVMRUFTRV9LRVlfUEFTU1dPUkRcCiAgICAgICAgICAgICAgICB2MVNpZ25pbmdFbmFibGVkIHRydWVcCiAgICAgICAgICAgICAgICB2MlNpZ25pbmdFbmFibGVkIHRydWVcCiAgICAgICAgICAgICAgICBlbmFibGVWM1NpZ25pbmcgPSB0cnVlXAogICAgICAgICAgICAgICAgZW5hYmxlVjRTaWduaW5nID0gdHJ1ZVwKICAgICAgICAgICAgfVwKICAgICAgICB9XAogICAgfVwKXA=='
+          signingConfig='ICAgICAgICAgICAgaWYgKHByb2plY3QuaGFzUHJvcGVydHkoIlJFTEVBU0VfU1RPUkVfRklMRSIpKSB7XAogICAgICAgICAgICAgICAgc2lnbmluZ0NvbmZpZyBzaWduaW5nQ29uZmlncy5teUNvbmZpZ1wKICAgICAgICAgICAgfVwK'
+          signingConfigs="$(echo "$signingConfigs" |base64 -d )"
+          signingConfig="$(echo "$signingConfig" |base64 -d )"
+          sed -i -e "/defaultConfig {/i\\$signingConfigs " -e "/debug {/a\\$signingConfig " -e "/release {/a\\$signingConfig " ./app/build.gradle
+          cp -f ${{ github.workspace }}/actions/.github/scripts/TVBoxOSC.jks ./app/TVBoxOSC.jks
+          sed -i '$a\RELEASE_STORE_FILE=./TVBoxOSC.jks'     ./gradle.properties
+          sed -i '$a\RELEASE_KEY_ALIAS=TVBoxOSC'            ./gradle.properties
+          sed -i '$a\RELEASE_STORE_PASSWORD=TVBoxOSC'       ./gradle.properties
+          sed -i '$a\RELEASE_KEY_PASSWORD=TVBoxOSC'         ./gradle.properties
 
-          # 修改build.gradle
-          sed -i '/android {/a\
-          signingConfigs {\
-              release {\
-                  storeFile file(RELEASE_STORE_FILE)\
-                  storePassword RELEASE_STORE_PASSWORD\
-                  keyAlias RELEASE_KEY_ALIAS\
-                  keyPassword RELEASE_KEY_PASSWORD\
-                  v1SigningEnabled true\
-                  v2SigningEnabled true\
-              }\
-          }' ./app/build.gradle
-
-          sed -i '/buildTypes {/a\
-              release {\
-                  signingConfig signingConfigs.release\
-              }' ./app/build.gradle
-
-      # 步骤5：修改版本信息
-      - name: Modify Version
+      # 原始流程第6步：额外修改（保留）
+      - name: Extra Modify
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          # 版本号 = 提交数
+          echo "modify version info"
           version_code=$(git rev-list --count HEAD)
-          
-          # 版本名 = 构建时间标签
-          version_name="${{ env.构建标签 }}"
-          
-          # 修改build.gradle
-          sed -i "s/versionCode .*/versionCode $version_code/" ./app/build.gradle
-          sed -i "s/versionName .*/versionName \"$version_name\"/" ./app/build.gradle
-          sed -i "s/applicationId .*/applicationId \"${{ matrix.userName }}.tvbox.osc\"/" ./app/build.gradle
+          echo "version code: $version_code"
+          sed -i "/   versionCode/c\\versionCode ${version_code}" ./app/build.gradle
+          sed -i "/   versionName/c\\versionName '${{ env.tag }}'" ./app/build.gradle
+          sed -i "/   applicationId/c\\applicationId '${{ matrix.userName }}.tvbox.osc'" ./app/build.gradle
+          sed -i "/android:text=/c\\        android:text=\"v${{ env.tag }}\\\\n本软件只提供聚合展示功能，所有资源来自网上, 软件不参与任何制作, 上传, 储存, 下载等内容。 软件仅供学习参考, 请于安装后24小时内删除。\\\\n\\\\n打包分发请保留出处\\\\n${{ matrix.repoUrl }}\"" ./app/src/main/res/layout/dialog_about.xml
+          echo "fix crosswalk library"
+          if grep -q 'crosswalk' build.gradle; then
+            sed -i "/crosswalk/a\   maven { url 'https://celetor.github.io/crosswalk/releases/crosswalk/android/maven2' }\n maven { url 'https://maven.aliyun.com/repository/jcenter' }" build.gradle
+          else
+            sed -i "/jitpack.io/a\  maven { url 'https://celetor.github.io/crosswalk/releases/crosswalk/android/maven2' }\n maven { url 'https://maven.aliyun.com/repository/jcenter' }" build.gradle
+          fi
+          if [ "${{ matrix.userName }}" == "takagen99" ]; then
+            echo "Using Java 17 for takagen99"
+          else
+            sed -i "/2048m --add-opens java.base/c\\org.gradle.jvmargs=-Xmx2048m --add-opens java.base/java.io=ALL-UNNAMED" ./gradle.properties
+          fi
+          cp -f ${{ github.workspace }}/actions/.github/scripts/local.properties ./local.properties
+          sed -i "/buildPython/c\\//buildPython" ./pyramid/build.gradle
 
-      # 步骤6：设置构建环境
+      # 原始流程第7步：JDK设置（保留）
       - name: Setup JDK
         if: ${{ env.commit && matrix.javaVersion }}
         uses: actions/setup-java@v4
@@ -114,60 +112,62 @@ jobs:
           distribution: temurin
           java-version: ${{ matrix.javaVersion }}
 
+      # 原始流程第8步：Gradle设置（保留）
       - name: Setup Gradle
         if: ${{ env.commit }}
         uses: gradle/actions/setup-gradle@v4
 
-      # 步骤7：执行构建
-      - name: Build APK
+      # 原始流程第9步：构建APK（保留）
+      - name: Build With Gradle
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          ./gradlew assembleRelease \
-            --no-daemon \
-            --warning-mode all \
-            --stacktrace
+          chmod +x gradlew
+          ./gradlew assembleRelease --build-cache --parallel --daemon --warning-mode all
 
-      # 步骤8：整理输出文件
-      - name: Prepare Artifacts
+      # 原始流程第10步：重命名APK（保留）
+      - name: Rename App
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          mkdir -p artifacts
-          
-          # 移动APK文件
-          find . -name "*.apk" -not -name "*debug*" -exec cp {} artifacts \;
-          
-          # 重命名APK文件
-          cd artifacts
-          for apk in *.apk; do
-            new_name="TVBox_${apk%%-release*}_${{ matrix.userName }}_${{ env.构建标签 }}.apk"
-            mv "$apk" "$new_name"
+          rm -rf apk/
+          mkdir -p apk/
+          for file in `find . -name "*.apk" -print`; do
+            filename=$(basename "$file")
+            if [[ $filename =~ "debug" ]] ; then
+              echo "ignore: $file"
+            elif [[ $filename =~ "release" ]] ; then
+              echo "move and rename: $file"
+              match_name=${filename%.*}
+              match_name=${match_name##*release}
+              new_name="TVBox${match_name}_${{ matrix.userName }}_${{ env.tag }}.apk"
+              echo "new_name: $new_name"
+              mv "$file" "apk/$new_name"
+            else
+              echo "only move: $file"
+              mv "$file" apk/
+            fi
           done
-          
-          # 打包源码
-          cd ..
-          zip -r artifacts/source_${{ env.commit_short }}.zip . \
-            -x ".git/*" "build/*" "*.apk"
 
-      # 步骤9：上传构建结果
-      - name: Upload Artifacts
+      # 新增步骤：上传APK作为产物（替换原始发布流程）
+      - name: Upload APK Artifact
         if: ${{ env.commit }}
         uses: actions/upload-artifact@v4
         with:
-          name: Build_${{ matrix.userName }}_${{ env.构建标签 }}
-          path: TVBoxOSC/artifacts/*
+          name: TVBox_${{ matrix.userName }}_${{ env.tag }}
+          path: TVBoxOSC/apk/*.apk
           retention-days: 7
 
-      # 步骤10：更新构建记录
-      - name: Update Build Log
+      # 原始流程最终步骤：更新记录（保留）
+      - name: Commit And Push
         if: ${{ env.commit }}
         working-directory: actions
+        continue-on-error: true
         run: |
-          mkdir -p build_log
-          echo "${{ env.commit }}" > ./build_log/${{ matrix.userName }}.log
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git add ./build_log
-          git commit -m "Update build log for ${{ matrix.userName }}"
-          git push
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git pull
+          echo "${{ env.commit }}" > ./log/${{ matrix.userName }}.txt
+          git add --all
+          git commit -m "${{ matrix.userName }}_${{ env.commit }}"
+          git push origin main
