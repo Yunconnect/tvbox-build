@@ -1,15 +1,10 @@
-name: Build
+name: Build (Manual Only)
 
 on:
-  schedule:
-    - cron: 6 */8 * * *
-  #  push:
-  #    branches:
-  #      - main
   workflow_dispatch:
     inputs:
       rebuild:
-        description: 'rebuild but not release'
+        description: 'Force rebuild (even if no new commits)'
         required: false
         type: boolean
 
@@ -27,12 +22,6 @@ jobs:
             repoUrl: https://github.com/takagen99/Box
             branchName: main
             javaVersion: 17
-    env:
-      # 登录蓝奏云后在控制台运行document.cookie
-      ylogin: ${{ secrets.YLOGIN }}
-      phpdisk_info: ${{ secrets.PHPDISK_INFO }}
-      # 蓝奏云里的文件夹ID
-      lanzou_folder_id: 5848262
 
     steps:
       - name: Checkout
@@ -46,7 +35,6 @@ jobs:
           git clone --depth=1 -b ${{ matrix.branchName }} ${{ matrix.repoUrl }} TVBoxOSC
           cd TVBoxOSC
           commit=`git log --pretty=format:"%H" |grep -o '[a-z0-9]\{40\}' |head -1`
-          #commit=$(curl -sL ${{ matrix.repoUrl }}/commits/${{ matrix.branchName }} |grep -o '/commit/[a-z0-9]\+' |head -1 | cut -d\/ -f3)
           echo "commit: $commit"
           cd ../actions
           if ! grep -q "$commit" ./log/${{ matrix.userName }}.txt; then
@@ -61,7 +49,6 @@ jobs:
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          #git clone -b ${{ matrix.branchName }} ${{ matrix.repoUrl }} TVBoxOSC
           git fetch --unshallow
 
       - name: Compress Source Code
@@ -69,7 +56,6 @@ jobs:
         working-directory: TVBoxOSC
         run: |
           echo "tag=$(git log --date=format:'%Y.%m%d.%H%M' --pretty=format:%cd ${{ env.commit_id }} -1)" >> $GITHUB_ENV
-          echo "update_time=$(git log --date=format:'%Y/%m/%d %H:%M' --pretty=format:%cd ${{ env.commit_id }} -1)" >> $GITHUB_ENV
           zip -q -x ".git/*" -r ${{ matrix.userName }}_${{ env.commit_id }}_src.zip .
 
       - name: Add Sign Info
@@ -91,24 +77,19 @@ jobs:
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
-          echo "modify version info"
           version_code=$(git rev-list --count HEAD)
-          echo "version code: $version_code"
           sed -i "/   versionCode/c\\versionCode ${version_code}" ./app/build.gradle
           sed -i "/   versionName/c\\versionName '${{ env.tag }}'" ./app/build.gradle
           sed -i "/   applicationId/c\\applicationId '${{ matrix.userName }}.tvbox.osc'" ./app/build.gradle
           sed -i "/android:text=/c\\        android:text=\"v${{ env.tag }}\\\\n本软件只提供聚合展示功能，所有资源来自网上, 软件不参与任何制作, 上传, 储存, 下载等内容。 软件仅供学习参考, 请于安装后24小时内删除。\\\\n\\\\n打包分发请保留出处\\\\n${{ matrix.repoUrl }}\"" ./app/src/main/res/layout/dialog_about.xml
-          echo "fix crosswalk library"
           if grep -q 'crosswalk' build.gradle; then
             sed -i "/crosswalk/a\   maven { url 'https://celetor.github.io/crosswalk/releases/crosswalk/android/maven2' }\n maven { url 'https://maven.aliyun.com/repository/jcenter' }" build.gradle
           else
             sed -i "/jitpack.io/a\  maven { url 'https://celetor.github.io/crosswalk/releases/crosswalk/android/maven2' }\n maven { url 'https://maven.aliyun.com/repository/jcenter' }" build.gradle
           fi
           if [ "${{ matrix.userName }}" == "takagen99" ]; then
-            echo "fix ApiConfig.java"
-            #sed -i "/LOG./c\\//LOG.i" ./app/src/main/java/com/github/tvbox/osc/api/ApiConfig.java
+            echo "Using Java 17 for takagen99"
           else
-            echo "fix gradle.properties"
             sed -i "/2048m --add-opens java.base/c\\org.gradle.jvmargs=-Xmx2048m --add-opens java.base/java.io=ALL-UNNAMED" ./gradle.properties
           fi
           cp -f ${{ github.workspace }}/actions/.github/scripts/local.properties ./local.properties
@@ -161,54 +142,11 @@ jobs:
             fi
           done
 
-      - name: Write Update Changelog
-        if: ${{ env.commit && !inputs.rebuild }}
-        run: |
-          cd actions
-          # myLastCommit=`git log --oneline |grep -o '[a-z0-9]\{40\}' |head -1`
-          # myLastCommit=$(grep "${{ matrix.userName }}" README.md |grep -o '[a-z0-9]\{40\}')
-          myLastCommit=$(grep '[a-z0-9]\{40\}' ./log/${{ matrix.userName }}.txt)
-          echo $myLastCommit
-          cd ../TVBoxOSC
-          export LESSCHARSET=utf-8
-          if [ "${{ env.commit }}" == "${myLastCommit}" ]; then
-            COMMIT_MESSAGE=$(git log --pretty=format:%B ${{ env.commit_id }} -1 |sed -e "s# \{2,\}#\n#g" -e "/^Merge \(pull\|branch\|remote\)/d" -e '/^$/d' |cat -n |sort -k2,2 -k1,1n |uniq -f1 |sort -k1,1n |cut -f2- )
-          else
-            COMMIT_MESSAGE=$(git log --pretty=format:%B ${{ env.commit_id }}...${myLastCommit:0:7} |sed -e "s# \{2,\}#\n#g" -e "/^Merge \(pull\|branch\|remote\)/d" -e '/^$/d' |cat -n |sort -k2,2 -k1,1n |uniq -f1 |sort -k1,1n |cut -f2- )
-          fi
-          echo -e "Credit: [${{ matrix.userName }}](${{ matrix.repoUrl }})\n\`\`\`\n${COMMIT_MESSAGE}\n\`\`\`" > Changelog.txt
-          echo "$COMMIT_MESSAGE" > desc.txt
-
-      - name: Release App
-        uses: softprops/action-gh-release@v2
-        if: ${{ env.commit && !inputs.rebuild }}
+      - name: Upload Artifacts
+        if: ${{ env.commit }}
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.tag }}
-          tag_name: ${{ env.tag }}_${{ matrix.userName }}
-          body_path: TVBoxOSC/Changelog.txt
-          files: |
+          name: ${{ matrix.userName }}_build_${{ env.tag }}
+          path: |
             TVBoxOSC/apk/*
             TVBoxOSC/${{ matrix.userName }}_${{ env.commit_id }}_src.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Commit And Push
-        if: ${{ env.commit && !inputs.rebuild }}
-        working-directory: actions
-        continue-on-error: true
-        run: |
-          git config --local user.name "github-actions[bot]"
-          git config --local user.email "github-actions[bot]@users.noreply.github.com"
-          git pull
-          # sed -i "/Update Time/c\\+ Update Time: ${{ env.update_time }}" README.md
-          # sed -i "/${{ matrix.userName }}/s#Updated: [a-zA-Z0-9]*#Updated: ${{ env.commit }}#" README.md
-          echo "${{ env.commit }}" > ./log/${{ matrix.userName }}.txt
-          git add --all
-          git commit -m "${{ matrix.userName }}_${{ env.commit }}"
-          git push origin main
-
-      - name: Upload App To Lanzou
-        if: ${{ env.commit && env.ylogin && !inputs.rebuild }}
-        run: |
-          pip install requests
-          python ${{ github.workspace }}/actions/.github/scripts/lanzou-api.py "${{ github.workspace }}/TVBoxOSC/apk/" "$lanzou_folder_id" "${{ github.workspace }}/TVBoxOSC/desc.txt"
