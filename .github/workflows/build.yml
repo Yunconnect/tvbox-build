@@ -1,10 +1,12 @@
 name: Build
 
 on:
+  schedule:
+    - cron: 6 */8 * * *
   workflow_dispatch:
     inputs:
       rebuild:
-        description: 'Rebuild but not release'
+        description: 'rebuild but not release'
         required: false
         type: boolean
 
@@ -30,66 +32,27 @@ jobs:
           fetch-depth: 0
           path: actions
 
-      - name: Get The Lastest Commit
+      - name: Clone Source Code
         run: |
           git clone --depth=1 -b ${{ matrix.branchName }} ${{ matrix.repoUrl }} TVBoxOSC
-          cd TVBoxOSC
-          commit=`git log --pretty=format:"%H" |grep -o '[a-z0-9]\{40\}' |head -1`
-          echo "commit: $commit"
-          cd ../actions
-          echo "commit=$commit" >> $GITHUB_ENV
-          echo "commit_id=${commit:0:7}" >> $GITHUB_ENV
-
-      - name: Clone Source Code
-        if: ${{ env.commit }}
-        working-directory: TVBoxOSC
-        run: git fetch --unshallow
 
       - name: Setup JDK
-        if: ${{ env.commit && matrix.javaVersion }}
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ matrix.javaVersion }}
+          java-version: ${{ matrix.javaVersion || 11 }}
 
       - name: Setup Gradle
-        if: ${{ env.commit }}
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build With Gradle
-        if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --build-cache --parallel --daemon --warning-mode all
 
-      - name: Rename App
-        if: ${{ env.commit }}
-        working-directory: TVBoxOSC
-        run: |
-          rm -rf apk/
-          mkdir -p apk/
-          for file in `find . -name "*.apk" -print`; do
-            filename=$(basename "$file")
-            if [[ $filename =~ "debug" ]] ; then
-              echo "ignore: $file"
-            elif [[ $filename =~ "release" ]] ; then
-              echo "move and rename: $file"
-              match_name=${filename%.*}
-              match_name=${match_name##*release}
-              new_name="TVBox${match_name}_${{ matrix.userName }}_${{ env.commit_id }}.apk"
-              echo "new_name: $new_name"
-              mv "$file" "apk/$new_name"
-            else
-              echo "only move: $file"
-              mv "$file" apk/
-            fi
-          done
-
-      - name: Upload APK as Artifact
-        if: ${{ env.commit }}
+      - name: Store Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: TVBox_APKs
-          path: TVBoxOSC/apk/
-          retention-days: 7
+          name: TVBoxOSC_APK
+          path: TVBoxOSC/app/build/outputs/apk/release/*.apk
