@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       rebuild:
-        description: 'rebuild but not release'
+        description: 'Rebuild but not release'
         required: false
         type: boolean
 
@@ -22,10 +22,6 @@ jobs:
             repoUrl: https://github.com/takagen99/Box
             branchName: main
             javaVersion: 17
-    env:
-      ylogin: ${{ secrets.YLOGIN }}
-      phpdisk_info: ${{ secrets.PHPDISK_INFO }}
-      lanzou_folder_id: 5848262
 
     steps:
       - name: Checkout
@@ -34,48 +30,43 @@ jobs:
           fetch-depth: 0
           path: actions
 
-      - name: Get The Lastest Commit
+      - name: Clone Source Code
         run: |
           git clone --depth=1 -b ${{ matrix.branchName }} ${{ matrix.repoUrl }} TVBoxOSC
           cd TVBoxOSC
-          commit=`git log --pretty=format:"%H" |grep -o '[a-z0-9]\{40\}' |head -1`
-          echo "commit: $commit"
-          cd ../actions
-          if ! grep -q "$commit" ./log/${{ matrix.userName }}.txt; then
-            echo "commit=$commit" >> $GITHUB_ENV
-            echo "commit_id=${commit:0:7}" >> $GITHUB_ENV
-          elif [[ "${{ inputs.rebuild }}" == "true" ]] ; then
-            echo "commit=$commit" >> $GITHUB_ENV
-            echo "commit_id=${commit:0:7}" >> $GITHUB_ENV
-          fi
-
-      - name: Clone Source Code
-        if: ${{ env.commit }}
-        working-directory: TVBoxOSC
-        run: |
           git fetch --unshallow
 
       - name: Setup JDK
-        if: ${{ env.commit && matrix.javaVersion }}
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: ${{ matrix.javaVersion }}
+          java-version: ${{ matrix.javaVersion || 11 }}
 
       - name: Setup Gradle
-        if: ${{ env.commit }}
         uses: gradle/actions/setup-gradle@v4
 
       - name: Build With Gradle
-        if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --build-cache --parallel --daemon --warning-mode all
 
-      - name: Store Build Artifacts
+      - name: Rename App
+        working-directory: TVBoxOSC
+        run: |
+          rm -rf apk/
+          mkdir -p apk/
+          for file in `find . -name "*.apk" -print`; do
+            filename=$(basename "$file")
+            if [[ $filename =~ "release" ]] ; then
+              new_name="TVBox_${{ matrix.userName }}.apk"
+              mv "$file" "apk/$new_name"
+            fi
+          done
+
+      - name: Upload APK to Artifacts
         uses: actions/upload-artifact@v4
-        if: ${{ env.commit }}
         with:
-          name: TVBoxOSC_APK
-          path: TVBoxOSC/app/build/outputs/apk/release/*.apk
+          name: TVBox_APK
+          path: TVBoxOSC/apk/*.apk
+          retention-days: 7
